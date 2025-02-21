@@ -95,7 +95,18 @@ int main() {
             // Atualizar display
             ssd1306_fill(&ssd, false);
 
-            // Desenhar cursor 3x3
+            // Exibir pontuação PRIMEIRO
+            char score_str[4];
+            snprintf(score_str, sizeof(score_str), "%d", score);
+            ssd1306_draw_string(&ssd, "Score:", 0, 0);
+            
+            int x_pos = 48;
+            for (int i = 0; score_str[i] != '\0'; i++) {
+                ssd1306_draw_char(&ssd, score_str[i], x_pos, 0);
+                x_pos += 8;
+            }
+
+            // Desenhar cursor 3x3 DEPOIS do texto
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dy = -1; dy <= 1; dy++) {
                     int x = cursor_x + dx;
@@ -106,7 +117,7 @@ int main() {
                 }
             }
 
-            // Desenhar alvo 3x3
+            // Desenhar alvo 3x3 POR ÚLTIMO (para ficar na frente)
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dy = -1; dy <= 1; dy++) {
                     int x = target_x + dx;
@@ -115,17 +126,6 @@ int main() {
                         ssd1306_pixel(&ssd, x, y, true);
                     }
                 }
-            }
-
-            // Exibir pontuação
-            char score_str[4];
-            snprintf(score_str, sizeof(score_str), "%d", score);
-            ssd1306_draw_string(&ssd, "Score:", 0, 0);
-            
-            int x_pos = 48;
-            for (int i = 0; score_str[i] != '\0'; i++) {
-                ssd1306_draw_char(&ssd, score_str[i], x_pos, 0);
-                x_pos += 8;
             }
 
             ssd1306_send_data(&ssd);
