@@ -40,6 +40,7 @@ uint8_t target_y = 32;
 uint8_t score = 0;
 bool playing = true;
 bool paused = false;
+bool game_over = false;
 
 ssd1306_t ssd;
 
@@ -49,6 +50,8 @@ bool detect_loud_sound();
 void play_sound(uint buzzer, uint freq);
 void update_led_matrix(uint8_t progress);
 void set_rgb_led(uint8_t r, uint8_t g, uint8_t b);
+void show_victory_screen();
+void reset_game();
 
 int main() {
     stdio_init_all();
@@ -57,6 +60,13 @@ int main() {
     srand(adc_read());
 
     while (1) {
+        if (game_over) {
+            show_victory_screen();
+            sleep_ms(5000);
+            reset_game();
+            continue;
+        }
+
         if (playing && !paused) {
             read_joystick();
 
@@ -64,17 +74,25 @@ int main() {
                 play_sound(BUZZER2, 3000);
             }
 
-            // Verificação de colisão ajustada
+            // Verificação de colisão
             if (abs(cursor_x - target_x) < 3 && abs(cursor_y - target_y) < 3) {
                 if (!gpio_get(JOYSTICK_BTN)) {
                     score++;
                     play_sound(BUZZER1, 2000);
-                    target_x = rand() % (WIDTH - 2);
-                    target_y = rand() % (HEIGHT - 2);
+                    target_x = (rand() % (WIDTH - 4)) + 2;
+                    target_y = (rand() % (HEIGHT - 4)) + 2;
                     sleep_ms(50);
                 }
             }
 
+            // Verificar vitória
+            if (score >= 25) {
+                game_over = true;
+                playing = false;
+                continue;
+            }
+
+            // Atualizar display
             ssd1306_fill(&ssd, false);
 
             // Desenhar cursor 3x3
@@ -82,7 +100,7 @@ int main() {
                 for (int dy = -1; dy <= 1; dy++) {
                     int x = cursor_x + dx;
                     int y = cursor_y + dy;
-                    if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
+                    if (x >= 1 && x < WIDTH-1 && y >= 1 && y < HEIGHT-1) {
                         ssd1306_pixel(&ssd, x, y, true);
                     }
                 }
@@ -93,13 +111,13 @@ int main() {
                 for (int dy = -1; dy <= 1; dy++) {
                     int x = target_x + dx;
                     int y = target_y + dy;
-                    if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
+                    if (x >= 1 && x < WIDTH-1 && y >= 1 && y < HEIGHT-1) {
                         ssd1306_pixel(&ssd, x, y, true);
                     }
                 }
             }
 
-            // Exibir pontuação como string
+            // Exibir pontuação
             char score_str[4];
             snprintf(score_str, sizeof(score_str), "%d", score);
             ssd1306_draw_string(&ssd, "Score:", 0, 0);
@@ -113,22 +131,21 @@ int main() {
             ssd1306_send_data(&ssd);
             update_led_matrix(score);
             set_rgb_led(0, 1, 0);
-        } else if (paused) {
+        } 
+        else if (paused) {
             set_rgb_led(1, 1, 0);
-        } else {
+        } 
+        else {
             set_rgb_led(1, 0, 0);
         }
 
+        // Verificar botões
         if (!gpio_get(BUTTON_A)) {
             paused = !paused;
             sleep_ms(200);
         }
         if (!gpio_get(BUTTON_B)) {
-            score = 0;
-            playing = true;
-            paused = false;
-            target_x = rand() % WIDTH;
-            target_y = rand() % HEIGHT;
+            reset_game();
             sleep_ms(200);
         }
 
@@ -188,8 +205,10 @@ void read_joystick() {
     uint16_t x_val = adc_read();
     adc_select_input(0);
     uint16_t y_val = adc_read();
-    cursor_x = (x_val * (WIDTH - 1)) / 4096;
-    cursor_y = (y_val * (HEIGHT - 1)) / 4096;
+    
+    // Mantém o cursor dentro dos limites (com borda de 2 pixels)
+    cursor_x = (x_val * (WIDTH - 4)) / 4096 + 2;
+    cursor_y = (y_val * (HEIGHT - 4)) / 4096 + 2;
 }
 
 bool detect_loud_sound() {
@@ -205,7 +224,7 @@ void play_sound(uint buzzer, uint freq) {
     pwm_set_wrap(slice_num, wrap);
     pwm_set_chan_level(slice_num, chan, wrap / 2);
     pwm_set_enabled(slice_num, true);
-    sleep_ms(200);  // Som mais longo
+    sleep_ms(200);
     pwm_set_enabled(slice_num, false);
 }
 
@@ -223,4 +242,31 @@ void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
     gpio_put(LED_R, r);
     gpio_put(LED_G, g);
     gpio_put(LED_B, b);
+}
+
+void show_victory_screen() {
+    ssd1306_fill(&ssd, false);
+    ssd1306_draw_string(&ssd, "PARABENS!", 20, 20);
+    ssd1306_draw_string(&ssd, "Score: 25", 30, 35);
+    ssd1306_draw_string(&ssd, "VOCE COMPLETOU!", 5, 50);
+    ssd1306_send_data(&ssd);
+    
+    // Efeito de LED
+    for (int i = 0; i < 5; i++) {
+        set_rgb_led(1, 1, 1);
+        sleep_ms(200);
+        set_rgb_led(0, 0, 0);
+        sleep_ms(200);
+    }
+}
+
+void reset_game() {
+    score = 0;
+    game_over = false;
+    playing = true;
+    paused = false;
+    cursor_x = WIDTH/2;
+    cursor_y = HEIGHT/2;
+    target_x = (rand() % (WIDTH - 4)) + 2;
+    target_y = (rand() % (HEIGHT - 4)) + 2;
 }
