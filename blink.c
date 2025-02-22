@@ -45,6 +45,10 @@ bool paused = false;
 bool game_over = false;
 bool victory = false;
 
+// Variáveis para debounce
+volatile uint64_t joystick_last_press_time = 0;
+const uint32_t DEBOUNCE_DELAY_MS = 100;
+
 ssd1306_t ssd;
 
 // Variáveis para temporizadores e interrupções
@@ -57,7 +61,7 @@ volatile bool led_state = false;
 struct repeating_timer game_timer;
 struct repeating_timer *blink_timer_ptr = NULL;
 
-// Declarações de funções
+// Protótipos de funções
 void init_peripherals(void);
 void read_joystick(void);
 bool detect_loud_sound(void);
@@ -71,10 +75,10 @@ void reset_game(void);
 void update_display(void);
 void maintain_final_screen(void);
 
-// Callbacks para temporizadores
+// Callbacks de debounce
 int64_t button_a_debounce_callback(alarm_id_t id, void *user_data) {
     button_a_pressed = false;
-    paused = !paused; // Alterna o estado de pausa após o debounce
+    paused = !paused;
     return 0;
 }
 
@@ -86,15 +90,16 @@ int64_t button_b_debounce_callback(alarm_id_t id, void *user_data) {
 
 int64_t joystick_btn_debounce_callback(alarm_id_t id, void *user_data) {
     joystick_btn_pressed = false;
+    gpio_set_irq_enabled(JOYSTICK_BTN, GPIO_IRQ_EDGE_FALL, true);
     return 0;
 }
 
 int64_t reset_game_callback(alarm_id_t id, void *user_data) {
     reset_game();
-    return 0; // Não repetir o alarme
+    return 0;
 }
 
-// Callback de interrupção para botões
+// Handler de interrupções
 void button_handler(uint gpio, uint32_t events) {
     if (gpio == BUTTON_A && events & GPIO_IRQ_EDGE_FALL && !button_a_pressed) {
         button_a_pressed = true;
@@ -104,28 +109,30 @@ void button_handler(uint gpio, uint32_t events) {
         button_b_pressed = true;
         add_alarm_in_ms(200, button_b_debounce_callback, NULL, false);
     }
-    if (gpio == JOYSTICK_BTN && events & GPIO_IRQ_EDGE_FALL && !joystick_btn_pressed) {
-        joystick_btn_pressed = true;
-        add_alarm_in_ms(50, joystick_btn_debounce_callback, NULL, false);
+    if (gpio == JOYSTICK_BTN && events & GPIO_IRQ_EDGE_FALL) {
+        uint64_t now = time_us_64();
+        if ((now - joystick_last_press_time) > (DEBOUNCE_DELAY_MS * 1000)) {
+            joystick_btn_pressed = true;
+            joystick_last_press_time = now;
+            gpio_set_irq_enabled(JOYSTICK_BTN, GPIO_IRQ_EDGE_FALL, false);
+            add_alarm_in_ms(DEBOUNCE_DELAY_MS, joystick_btn_debounce_callback, NULL, false);
+        }
     }
 }
 
-// Callback para o temporizador principal
+// Loop principal do jogo
 bool game_loop(struct repeating_timer *t) {
     if (game_over) {
-        maintain_final_screen(); // Mantém a tela de Game Over/Vitória
+        maintain_final_screen();
         return true;
     }
 
     if (playing && !paused) {
         read_joystick();
 
-        if (detect_loud_sound()) {
-            // Som do microfone removido
-        }
-
         if (joystick_btn_pressed) {
             click_count++;
+            joystick_btn_pressed = false;
 
             if (abs(cursor_x - target_x) < 3 && abs(cursor_y - target_y) < 3) {
                 score++;
@@ -152,7 +159,7 @@ bool game_loop(struct repeating_timer *t) {
             add_alarm_in_ms(5000, reset_game_callback, NULL, false);
         }
 
-        update_display(); // Atualiza o display apenas durante o jogo ativo
+        update_display();
         set_rgb_led(0, 1, 0);
     } else if (paused) {
         set_rgb_led(1, 1, 0);
@@ -163,9 +170,11 @@ bool game_loop(struct repeating_timer *t) {
     return true;
 }
 
-// Função para atualizar o display
+// Função de atualização do display
 void update_display(void) {
     ssd1306_fill(&ssd, false);
+    
+    // Desenha score
     char score_str[4];
     snprintf(score_str, sizeof(score_str), "%d", score);
     ssd1306_draw_string(&ssd, "Score:", 0, 0);
@@ -175,6 +184,7 @@ void update_display(void) {
         x_pos += 8;
     }
 
+    // Desenha contagem de cliques
     char click_str[4];
     snprintf(click_str, sizeof(click_str), "%d", click_count);
     x_pos = 0;
@@ -183,6 +193,7 @@ void update_display(void) {
         x_pos += 8;
     }
 
+    // Desenha cursor
     for (int dx = -1; dx <= 1; dx++) {
         for (int dy = -1; dy <= 1; dy++) {
             int x = cursor_x + dx;
@@ -193,6 +204,7 @@ void update_display(void) {
         }
     }
 
+    // Desenha alvo
     for (int dx = -1; dx <= 1; dx++) {
         for (int dy = -1; dy <= 1; dy++) {
             int x = target_x + dx;
@@ -206,7 +218,7 @@ void update_display(void) {
     ssd1306_send_data(&ssd);
 }
 
-// Função para manter a tela de Game Over/Vitória
+// Mantém tela final
 void maintain_final_screen(void) {
     if (victory) {
         ssd1306_fill(&ssd, false);
@@ -236,25 +248,24 @@ bool blink_led_callback(struct repeating_timer *t) {
     return false;
 }
 
+// Main
 int main() {
     stdio_init_all();
     init_peripherals();
 
-    // Configurar interrupções para os botões
     gpio_set_irq_enabled_with_callback(BUTTON_A, GPIO_IRQ_EDGE_FALL, true, &button_handler);
     gpio_set_irq_enabled_with_callback(BUTTON_B, GPIO_IRQ_EDGE_FALL, true, &button_handler);
     gpio_set_irq_enabled_with_callback(JOYSTICK_BTN, GPIO_IRQ_EDGE_FALL, true, &button_handler);
 
-    // Configurar temporizador principal do jogo
     add_repeating_timer_ms(20, game_loop, NULL, &game_timer);
 
     while (1) {
         tight_loop_contents();
     }
-
     return 0;
 }
 
+// Inicialização de periféricos
 void init_peripherals(void) {
     i2c_init(I2C_PORT, 100000);
     gpio_set_function(OLED_SDA, GPIO_FUNC_I2C);
@@ -301,6 +312,7 @@ void init_peripherals(void) {
     gpio_set_dir(LED_B, GPIO_OUT);
 }
 
+// Leitura do joystick
 void read_joystick(void) {
     adc_select_input(1);
     uint16_t x_val = adc_read();
@@ -314,12 +326,14 @@ void read_joystick(void) {
     if (cursor_y >= HEIGHT) cursor_y = HEIGHT - 1;
 }
 
+// Detecção de som alto
 bool detect_loud_sound(void) {
     adc_select_input(2);
     uint16_t mic_val = adc_read();
     return mic_val > 3000;
 }
 
+// Funções de áudio
 void play_sound(uint buzzer, uint freq) {
     uint slice_num = pwm_gpio_to_slice_num(buzzer);
     uint chan = pwm_gpio_to_channel(buzzer);
@@ -339,6 +353,7 @@ int64_t stop_sound(alarm_id_t id, void *user_data) {
     return 0;
 }
 
+// Controle da matriz de LEDs
 void update_led_matrix(uint8_t progress) {
     uint32_t colors[25] = {0};
     for (uint i = 0; i < progress && i < 25; i++) {
@@ -349,12 +364,14 @@ void update_led_matrix(uint8_t progress) {
     }
 }
 
+// LED RGB
 void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
     gpio_put(LED_R, r);
     gpio_put(LED_G, g);
     gpio_put(LED_B, b);
 }
 
+// Telas de vitória/derrota
 void show_victory_screen(void) {
     update_led_matrix(25);
     ssd1306_fill(&ssd, false);
@@ -370,7 +387,7 @@ void show_victory_screen(void) {
         free(blink_timer_ptr);
         blink_timer_ptr = NULL;
     }
-    led_blink_count = 20; // 20 ciclos de 250ms (5 segundos)
+    led_blink_count = 20;
     led_state = true;
     blink_timer_ptr = (struct repeating_timer *)malloc(sizeof(struct repeating_timer));
     add_repeating_timer_ms(250, blink_led_callback, NULL, blink_timer_ptr);
@@ -389,12 +406,13 @@ void show_game_over_screen(void) {
         free(blink_timer_ptr);
         blink_timer_ptr = NULL;
     }
-    led_blink_count = 20; // 20 ciclos de 250ms (5 segundos)
+    led_blink_count = 20;
     led_state = true;
     blink_timer_ptr = (struct repeating_timer *)malloc(sizeof(struct repeating_timer));
     add_repeating_timer_ms(250, blink_led_callback, NULL, blink_timer_ptr);
 }
 
+// Reinicia o jogo
 void reset_game(void) {
     score = 0;
     click_count = 0;
