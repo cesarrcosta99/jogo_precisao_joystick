@@ -78,7 +78,7 @@ int main() {
             read_joystick();
 
             if (detect_loud_sound()) {
-                play_sound(BUZZER2, 3000);
+                // Som do microfone removido
             }
 
             // Verificar clique no botão do joystick
@@ -302,8 +302,9 @@ void show_game_over_screen() {
     ssd1306_draw_string(&ssd, "Voce perdeu!", 20, 35);
     ssd1306_send_data(&ssd);
     
-    // Som de derrota
-    play_sound(BUZZER2, 1000); // Frequência diferente para game over
+    // Som de derrota usando a frequência do microfone
+    play_sound(BUZZER2, 3000); // Frequência que funcionava no microfone
+    sleep_ms(50); // Pequeno atraso para garantir que o som termine
     
     // Piscar LED vermelho
     for (int i = 0; i < 10; i++) {
