@@ -206,9 +206,13 @@ void read_joystick() {
     adc_select_input(0);
     uint16_t y_val = adc_read();
     
-    // Mantém o cursor dentro dos limites (com borda de 2 pixels)
-    cursor_x = (x_val * (WIDTH - 4)) / 4096 + 2;
-    cursor_y = (y_val * (HEIGHT - 4)) / 4096 + 2;
+    // Ajuste para cobrir toda a área do display (0 a 127 e 0 a 63)
+    cursor_x = (x_val * WIDTH) / 4096;
+    cursor_y = (y_val * HEIGHT) / 4096;
+
+    // Garantir que o cursor não ultrapasse os limites
+    if (cursor_x >= WIDTH) cursor_x = WIDTH - 1;
+    if (cursor_y >= HEIGHT) cursor_y = HEIGHT - 1;
 }
 
 bool detect_loud_sound() {
