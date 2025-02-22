@@ -97,8 +97,8 @@ int main() {
                 }
             }
 
-            // Verificar derrota (mais de 20 cliques sem ponto)
-            if (click_count > 20) {
+            // Verificar derrota (mais de 10 cliques sem ponto)
+            if (click_count > 10) {
                 game_over = true;
                 victory = false; // Indica derrota
                 continue;
@@ -284,6 +284,9 @@ void show_victory_screen() {
     ssd1306_draw_string(&ssd, "VOCE COMPLETOU!", 5, 50);
     ssd1306_send_data(&ssd);
     
+    // Som de vitória
+    play_sound(BUZZER1, 2500); // Frequência diferente para vitória
+    
     // Efeito de LED
     for (int i = 0; i < 5; i++) {
         set_rgb_led(1, 1, 1);
@@ -298,6 +301,9 @@ void show_game_over_screen() {
     ssd1306_draw_string(&ssd, "GAME OVER!", 20, 20);
     ssd1306_draw_string(&ssd, "Voce perdeu!", 20, 35);
     ssd1306_send_data(&ssd);
+    
+    // Som de derrota
+    play_sound(BUZZER2, 1000); // Frequência diferente para game over
     
     // Piscar LED vermelho
     for (int i = 0; i < 10; i++) {
