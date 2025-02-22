@@ -56,6 +56,8 @@ target_link_libraries(blink
     hardware_i2c
     hardware_pwm
     hardware_adc
+    hardware_timer
+
 )
 
 target_include_directories(blink PRIVATE

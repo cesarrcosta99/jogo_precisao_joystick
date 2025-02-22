@@ -4,6 +4,7 @@
 #include "hardware/adc.h"
 #include "hardware/i2c.h"
 #include "hardware/pio.h"
+#include "hardware/timer.h"
 #include "ws2812.pio.h"
 #include "inc/ssd1306.h"
 #include "inc/font.h"
@@ -38,151 +39,223 @@ uint8_t cursor_y = 32;
 uint8_t target_x = 64;
 uint8_t target_y = 32;
 uint8_t score = 0;
-uint8_t click_count = 0; // Contador de cliques no botão do joystick
+uint8_t click_count = 0;
 bool playing = true;
 bool paused = false;
 bool game_over = false;
-bool victory = false; // Para diferenciar vitória de derrota
+bool victory = false;
 
 ssd1306_t ssd;
 
-void init_peripherals();
-void read_joystick();
-bool detect_loud_sound();
+// Variáveis para temporizadores e interrupções
+volatile bool button_a_pressed = false;
+volatile bool button_b_pressed = false;
+volatile bool joystick_btn_pressed = false;
+volatile bool sound_active = false;
+volatile int led_blink_count = 0;
+volatile bool led_state = false;
+struct repeating_timer game_timer;
+struct repeating_timer *blink_timer_ptr = NULL;
+
+// Declarações de funções
+void init_peripherals(void);
+void read_joystick(void);
+bool detect_loud_sound(void);
 void play_sound(uint buzzer, uint freq);
+int64_t stop_sound(alarm_id_t id, void *user_data);
 void update_led_matrix(uint8_t progress);
 void set_rgb_led(uint8_t r, uint8_t g, uint8_t b);
-void show_victory_screen();
-void show_game_over_screen();
-void reset_game();
+void show_victory_screen(void);
+void show_game_over_screen(void);
+void reset_game(void);
+void update_display(void);
+void maintain_final_screen(void);
+
+// Callbacks para temporizadores
+int64_t button_a_debounce_callback(alarm_id_t id, void *user_data) {
+    button_a_pressed = false;
+    paused = !paused; // Alterna o estado de pausa após o debounce
+    return 0;
+}
+
+int64_t button_b_debounce_callback(alarm_id_t id, void *user_data) {
+    button_b_pressed = false;
+    reset_game();
+    return 0;
+}
+
+int64_t joystick_btn_debounce_callback(alarm_id_t id, void *user_data) {
+    joystick_btn_pressed = false;
+    return 0;
+}
+
+int64_t reset_game_callback(alarm_id_t id, void *user_data) {
+    reset_game();
+    return 0; // Não repetir o alarme
+}
+
+// Callback de interrupção para botões
+void button_handler(uint gpio, uint32_t events) {
+    if (gpio == BUTTON_A && events & GPIO_IRQ_EDGE_FALL && !button_a_pressed) {
+        button_a_pressed = true;
+        add_alarm_in_ms(200, button_a_debounce_callback, NULL, false);
+    }
+    if (gpio == BUTTON_B && events & GPIO_IRQ_EDGE_FALL && !button_b_pressed) {
+        button_b_pressed = true;
+        add_alarm_in_ms(200, button_b_debounce_callback, NULL, false);
+    }
+    if (gpio == JOYSTICK_BTN && events & GPIO_IRQ_EDGE_FALL && !joystick_btn_pressed) {
+        joystick_btn_pressed = true;
+        add_alarm_in_ms(50, joystick_btn_debounce_callback, NULL, false);
+    }
+}
+
+// Callback para o temporizador principal
+bool game_loop(struct repeating_timer *t) {
+    if (game_over) {
+        maintain_final_screen(); // Mantém a tela de Game Over/Vitória
+        return true;
+    }
+
+    if (playing && !paused) {
+        read_joystick();
+
+        if (detect_loud_sound()) {
+            // Som do microfone removido
+        }
+
+        if (joystick_btn_pressed) {
+            click_count++;
+
+            if (abs(cursor_x - target_x) < 3 && abs(cursor_y - target_y) < 3) {
+                score++;
+                play_sound(BUZZER1, 2000);
+                target_x = (rand() % (WIDTH - 4)) + 2;
+                target_y = (rand() % (HEIGHT - 4)) + 2;
+                click_count = 0;
+                update_led_matrix(score);
+            }
+        }
+
+        if (click_count > 10) {
+            game_over = true;
+            victory = false;
+            show_game_over_screen();
+            add_alarm_in_ms(5000, reset_game_callback, NULL, false);
+        }
+
+        if (score >= 25) {
+            update_led_matrix(score);
+            game_over = true;
+            victory = true;
+            show_victory_screen();
+            add_alarm_in_ms(5000, reset_game_callback, NULL, false);
+        }
+
+        update_display(); // Atualiza o display apenas durante o jogo ativo
+        set_rgb_led(0, 1, 0);
+    } else if (paused) {
+        set_rgb_led(1, 1, 0);
+    } else {
+        set_rgb_led(1, 0, 0);
+    }
+
+    return true;
+}
+
+// Função para atualizar o display
+void update_display(void) {
+    ssd1306_fill(&ssd, false);
+    char score_str[4];
+    snprintf(score_str, sizeof(score_str), "%d", score);
+    ssd1306_draw_string(&ssd, "Score:", 0, 0);
+    int x_pos = 48;
+    for (int i = 0; score_str[i] != '\0'; i++) {
+        ssd1306_draw_char(&ssd, score_str[i], x_pos, 0);
+        x_pos += 8;
+    }
+
+    char click_str[4];
+    snprintf(click_str, sizeof(click_str), "%d", click_count);
+    x_pos = 0;
+    for (int i = 0; click_str[i] != '\0'; i++) {
+        ssd1306_draw_char(&ssd, click_str[i], x_pos, 12);
+        x_pos += 8;
+    }
+
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            int x = cursor_x + dx;
+            int y = cursor_y + dy;
+            if (x >= 1 && x < WIDTH-1 && y >= 1 && y < HEIGHT-1) {
+                ssd1306_pixel(&ssd, x, y, true);
+            }
+        }
+    }
+
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            int x = target_x + dx;
+            int y = target_y + dy;
+            if (x >= 1 && x < WIDTH-1 && y >= 1 && y < HEIGHT-1) {
+                ssd1306_pixel(&ssd, x, y, true);
+            }
+        }
+    }
+
+    ssd1306_send_data(&ssd);
+}
+
+// Função para manter a tela de Game Over/Vitória
+void maintain_final_screen(void) {
+    if (victory) {
+        ssd1306_fill(&ssd, false);
+        ssd1306_draw_string(&ssd, "PARABENS!", 20, 20);
+        ssd1306_draw_string(&ssd, "Score: 25", 30, 35);
+        ssd1306_draw_string(&ssd, "VOCE COMPLETOU!", 5, 50);
+        ssd1306_send_data(&ssd);
+    } else {
+        ssd1306_fill(&ssd, false);
+        ssd1306_draw_string(&ssd, "GAME OVER!", 20, 20);
+        ssd1306_draw_string(&ssd, "Voce perdeu!", 20, 35);
+        ssd1306_send_data(&ssd);
+    }
+}
+
+// Callback para piscar LEDs
+bool blink_led_callback(struct repeating_timer *t) {
+    if (led_blink_count > 0) {
+        set_rgb_led(led_state ? 1 : 0, led_state ? (victory ? 1 : 0) : 0, led_state ? (victory ? 1 : 0) : 0);
+        led_state = !led_state;
+        if (!led_state) led_blink_count--;
+        return true;
+    }
+    cancel_repeating_timer(t);
+    free(blink_timer_ptr);
+    blink_timer_ptr = NULL;
+    return false;
+}
 
 int main() {
     stdio_init_all();
     init_peripherals();
-    adc_select_input(2);
-    srand(adc_read());
+
+    // Configurar interrupções para os botões
+    gpio_set_irq_enabled_with_callback(BUTTON_A, GPIO_IRQ_EDGE_FALL, true, &button_handler);
+    gpio_set_irq_enabled_with_callback(BUTTON_B, GPIO_IRQ_EDGE_FALL, true, &button_handler);
+    gpio_set_irq_enabled_with_callback(JOYSTICK_BTN, GPIO_IRQ_EDGE_FALL, true, &button_handler);
+
+    // Configurar temporizador principal do jogo
+    add_repeating_timer_ms(20, game_loop, NULL, &game_timer);
 
     while (1) {
-        if (game_over) {
-            if (victory) {
-                show_victory_screen();
-            } else {
-                show_game_over_screen();
-            }
-            sleep_ms(5000); // 5 segundos antes de reiniciar
-            reset_game();
-            continue;
-        }
-
-        if (playing && !paused) {
-            read_joystick();
-
-            if (detect_loud_sound()) {
-                // Som do microfone removido
-            }
-
-            // Verificar clique no botão do joystick
-            if (!gpio_get(JOYSTICK_BTN)) {
-                click_count++;
-                sleep_ms(50); // Debounce básico para evitar múltiplos cliques rápidos
-
-                // Verificação de colisão
-                if (abs(cursor_x - target_x) < 3 && abs(cursor_y - target_y) < 3) {
-                    score++;
-                    play_sound(BUZZER1, 2000);
-                    target_x = (rand() % (WIDTH - 4)) + 2;
-                    target_y = (rand() % (HEIGHT - 4)) + 2;
-                    click_count = 0; // Reseta o contador ao acertar o alvo
-                    update_led_matrix(score); // Atualiza a matriz imediatamente após incrementar o score
-                }
-            }
-
-            // Verificar derrota (mais de 10 cliques sem ponto)
-            if (click_count > 10) {
-                game_over = true;
-                victory = false; // Indica derrota
-                continue;
-            }
-
-            // Verificar vitória
-            if (score >= 25) {
-                update_led_matrix(score); // Garante que os 25 LEDs estejam acesos
-                game_over = true;
-                victory = true; // Indica vitória
-                playing = false;
-                continue;
-            }
-
-            // Atualizar display
-            ssd1306_fill(&ssd, false);
-
-            // Exibir pontuação
-            char score_str[4];
-            snprintf(score_str, sizeof(score_str), "%d", score);
-            ssd1306_draw_string(&ssd, "Score:", 0, 0);
-            int x_pos = 48;
-            for (int i = 0; score_str[i] != '\0'; i++) {
-                ssd1306_draw_char(&ssd, score_str[i], x_pos, 0);
-                x_pos += 8;
-            }
-
-            // Exibir apenas o número de cliques embaixo do "S" de "Score:"
-            char click_str[4];
-            snprintf(click_str, sizeof(click_str), "%d", click_count);
-            x_pos = 0; // Alinha com o "S" de "Score:"
-            for (int i = 0; click_str[i] != '\0'; i++) {
-                ssd1306_draw_char(&ssd, click_str[i], x_pos, 12); // y=12 para maior distância
-                x_pos += 8;
-            }
-
-            // Desenhar cursor 3x3
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    int x = cursor_x + dx;
-                    int y = cursor_y + dy;
-                    if (x >= 1 && x < WIDTH-1 && y >= 1 && y < HEIGHT-1) {
-                        ssd1306_pixel(&ssd, x, y, true);
-                    }
-                }
-            }
-
-            // Desenhar alvo 3x3
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    int x = target_x + dx;
-                    int y = target_y + dy;
-                    if (x >= 1 && x < WIDTH-1 && y >= 1 && y < HEIGHT-1) {
-                        ssd1306_pixel(&ssd, x, y, true);
-                    }
-                }
-            }
-
-            ssd1306_send_data(&ssd);
-            set_rgb_led(0, 1, 0);
-        } 
-        else if (paused) {
-            set_rgb_led(1, 1, 0);
-        } 
-        else {
-            set_rgb_led(1, 0, 0);
-        }
-
-        // Verificar botões
-        if (!gpio_get(BUTTON_A)) {
-            paused = !paused;
-            sleep_ms(200);
-        }
-        if (!gpio_get(BUTTON_B)) {
-            reset_game();
-            sleep_ms(200);
-        }
-
-        sleep_ms(20);
+        tight_loop_contents();
     }
+
     return 0;
 }
 
-void init_peripherals() {
+void init_peripherals(void) {
     i2c_init(I2C_PORT, 100000);
     gpio_set_function(OLED_SDA, GPIO_FUNC_I2C);
     gpio_set_function(OLED_SCL, GPIO_FUNC_I2C);
@@ -228,22 +301,20 @@ void init_peripherals() {
     gpio_set_dir(LED_B, GPIO_OUT);
 }
 
-void read_joystick() {
+void read_joystick(void) {
     adc_select_input(1);
     uint16_t x_val = adc_read();
     adc_select_input(0);
     uint16_t y_val = adc_read();
     
-    // Ajuste para cobrir toda a área do display (0 a 127 e 0 a 63)
     cursor_x = (x_val * WIDTH) / 4096;
-    cursor_y = ((4095 - y_val) * HEIGHT) / 4096; // Invertido para corrigir o eixo Y
+    cursor_y = ((4095 - y_val) * HEIGHT) / 4096;
 
-    // Garantir que o cursor não ultrapasse os limites
     if (cursor_x >= WIDTH) cursor_x = WIDTH - 1;
     if (cursor_y >= HEIGHT) cursor_y = HEIGHT - 1;
 }
 
-bool detect_loud_sound() {
+bool detect_loud_sound(void) {
     adc_select_input(2);
     uint16_t mic_val = adc_read();
     return mic_val > 3000;
@@ -256,8 +327,16 @@ void play_sound(uint buzzer, uint freq) {
     pwm_set_wrap(slice_num, wrap);
     pwm_set_chan_level(slice_num, chan, wrap / 2);
     pwm_set_enabled(slice_num, true);
-    sleep_ms(200);
+    sound_active = true;
+    add_alarm_in_ms(200, stop_sound, (void *)(uint32_t)buzzer, false);
+}
+
+int64_t stop_sound(alarm_id_t id, void *user_data) {
+    uint buzzer = (uint)(uint32_t)user_data;
+    uint slice_num = pwm_gpio_to_slice_num(buzzer);
     pwm_set_enabled(slice_num, false);
+    sound_active = false;
+    return 0;
 }
 
 void update_led_matrix(uint8_t progress) {
@@ -276,56 +355,62 @@ void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
     gpio_put(LED_B, b);
 }
 
-void show_victory_screen() {
-    update_led_matrix(25); // Garante que todos os 25 LEDs estejam acesos
+void show_victory_screen(void) {
+    update_led_matrix(25);
     ssd1306_fill(&ssd, false);
     ssd1306_draw_string(&ssd, "PARABENS!", 20, 20);
     ssd1306_draw_string(&ssd, "Score: 25", 30, 35);
     ssd1306_draw_string(&ssd, "VOCE COMPLETOU!", 5, 50);
     ssd1306_send_data(&ssd);
     
-    // Som de vitória
-    play_sound(BUZZER1, 2500); // Frequência diferente para vitória
+    play_sound(BUZZER1, 2500);
     
-    // Efeito de LED
-    for (int i = 0; i < 5; i++) {
-        set_rgb_led(1, 1, 1);
-        sleep_ms(200);
-        set_rgb_led(0, 0, 0);
-        sleep_ms(200);
+    if (blink_timer_ptr) {
+        cancel_repeating_timer(blink_timer_ptr);
+        free(blink_timer_ptr);
+        blink_timer_ptr = NULL;
     }
+    led_blink_count = 20; // 20 ciclos de 250ms (5 segundos)
+    led_state = true;
+    blink_timer_ptr = (struct repeating_timer *)malloc(sizeof(struct repeating_timer));
+    add_repeating_timer_ms(250, blink_led_callback, NULL, blink_timer_ptr);
 }
 
-void show_game_over_screen() {
+void show_game_over_screen(void) {
     ssd1306_fill(&ssd, false);
     ssd1306_draw_string(&ssd, "GAME OVER!", 20, 20);
     ssd1306_draw_string(&ssd, "Voce perdeu!", 20, 35);
     ssd1306_send_data(&ssd);
     
-    // Som de derrota usando a frequência do microfone
-    play_sound(BUZZER2, 3000); // Frequência que funcionava no microfone
-    sleep_ms(50); // Pequeno atraso para garantir que o som termine
+    play_sound(BUZZER2, 3000);
     
-    // Piscar LED vermelho
-    for (int i = 0; i < 10; i++) {
-        set_rgb_led(1, 0, 0); // Vermelho ligado
-        sleep_ms(250);
-        set_rgb_led(0, 0, 0); // Desligado
-        sleep_ms(250);
+    if (blink_timer_ptr) {
+        cancel_repeating_timer(blink_timer_ptr);
+        free(blink_timer_ptr);
+        blink_timer_ptr = NULL;
     }
+    led_blink_count = 20; // 20 ciclos de 250ms (5 segundos)
+    led_state = true;
+    blink_timer_ptr = (struct repeating_timer *)malloc(sizeof(struct repeating_timer));
+    add_repeating_timer_ms(250, blink_led_callback, NULL, blink_timer_ptr);
 }
 
-void reset_game() {
+void reset_game(void) {
     score = 0;
-    click_count = 0; // Reseta o contador de cliques
+    click_count = 0;
     game_over = false;
-    victory = false; // Reseta o estado de vitória
+    victory = false;
     playing = true;
     paused = false;
     cursor_x = WIDTH/2;
     cursor_y = HEIGHT/2;
     target_x = (rand() % (WIDTH - 4)) + 2;
     target_y = (rand() % (HEIGHT - 4)) + 2;
-    update_led_matrix(0); // Apaga todos os LEDs da matriz ao reiniciar o jogo
-    set_rgb_led(0, 1, 0); // LED verde ao reiniciar
+    update_led_matrix(0);
+    set_rgb_led(0, 1, 0);
+    if (blink_timer_ptr) {
+        cancel_repeating_timer(blink_timer_ptr);
+        free(blink_timer_ptr);
+        blink_timer_ptr = NULL;
+    }
 }
