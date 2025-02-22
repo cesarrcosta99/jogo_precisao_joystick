@@ -236,7 +236,7 @@ void read_joystick() {
     
     // Ajuste para cobrir toda a área do display (0 a 127 e 0 a 63)
     cursor_x = (x_val * WIDTH) / 4096;
-    cursor_y = (y_val * HEIGHT) / 4096;
+    cursor_y = ((4095 - y_val) * HEIGHT) / 4096; // Invertido para corrigir o eixo Y
 
     // Garantir que o cursor não ultrapasse os limites
     if (cursor_x >= WIDTH) cursor_x = WIDTH - 1;
