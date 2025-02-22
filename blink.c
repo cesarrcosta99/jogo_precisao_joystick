@@ -116,28 +116,26 @@ int main() {
             // Atualizar display
             ssd1306_fill(&ssd, false);
 
-            // Exibir pontuação PRIMEIRO
+            // Exibir pontuação
             char score_str[4];
             snprintf(score_str, sizeof(score_str), "%d", score);
             ssd1306_draw_string(&ssd, "Score:", 0, 0);
-            
             int x_pos = 48;
             for (int i = 0; score_str[i] != '\0'; i++) {
                 ssd1306_draw_char(&ssd, score_str[i], x_pos, 0);
                 x_pos += 8;
             }
 
-            // Exibir contador de cliques
+            // Exibir apenas o número de cliques embaixo do "S" de "Score:"
             char click_str[4];
             snprintf(click_str, sizeof(click_str), "%d", click_count);
-            ssd1306_draw_string(&ssd, "Clicks:", 0, 10);
-            x_pos = 48;
+            x_pos = 0; // Alinha com o "S" de "Score:"
             for (int i = 0; click_str[i] != '\0'; i++) {
-                ssd1306_draw_char(&ssd, click_str[i], x_pos, 10);
+                ssd1306_draw_char(&ssd, click_str[i], x_pos, 12); // y=12 para maior distância
                 x_pos += 8;
             }
 
-            // Desenhar cursor 3x3 DEPOIS do texto
+            // Desenhar cursor 3x3
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dy = -1; dy <= 1; dy++) {
                     int x = cursor_x + dx;
@@ -148,7 +146,7 @@ int main() {
                 }
             }
 
-            // Desenhar alvo 3x3 POR ÚLTIMO (para ficar na frente)
+            // Desenhar alvo 3x3
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dy = -1; dy <= 1; dy++) {
                     int x = target_x + dx;
