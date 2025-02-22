@@ -82,11 +82,13 @@ int main() {
                     target_x = (rand() % (WIDTH - 4)) + 2;
                     target_y = (rand() % (HEIGHT - 4)) + 2;
                     sleep_ms(50);
+                    update_led_matrix(score); // Atualiza a matriz imediatamente após incrementar o score
                 }
             }
 
             // Verificar vitória
             if (score >= 25) {
+                update_led_matrix(score); // Garante que os 25 LEDs estejam acesos
                 game_over = true;
                 playing = false;
                 continue;
@@ -129,7 +131,6 @@ int main() {
             }
 
             ssd1306_send_data(&ssd);
-            update_led_matrix(score);
             set_rgb_led(0, 1, 0);
         } 
         else if (paused) {
@@ -249,6 +250,7 @@ void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void show_victory_screen() {
+    update_led_matrix(25); // Garante que todos os 25 LEDs estejam acesos
     ssd1306_fill(&ssd, false);
     ssd1306_draw_string(&ssd, "PARABENS!", 20, 20);
     ssd1306_draw_string(&ssd, "Score: 25", 30, 35);
@@ -273,4 +275,5 @@ void reset_game() {
     cursor_y = HEIGHT/2;
     target_x = (rand() % (WIDTH - 4)) + 2;
     target_y = (rand() % (HEIGHT - 4)) + 2;
+    update_led_matrix(0); // Apaga todos os LEDs da matriz ao reiniciar o jogo
 }
