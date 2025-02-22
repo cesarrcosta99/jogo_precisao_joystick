@@ -38,9 +38,11 @@ uint8_t cursor_y = 32;
 uint8_t target_x = 64;
 uint8_t target_y = 32;
 uint8_t score = 0;
+uint8_t click_count = 0; // Contador de cliques no botão do joystick
 bool playing = true;
 bool paused = false;
 bool game_over = false;
+bool victory = false; // Para diferenciar vitória de derrota
 
 ssd1306_t ssd;
 
@@ -51,6 +53,7 @@ void play_sound(uint buzzer, uint freq);
 void update_led_matrix(uint8_t progress);
 void set_rgb_led(uint8_t r, uint8_t g, uint8_t b);
 void show_victory_screen();
+void show_game_over_screen();
 void reset_game();
 
 int main() {
@@ -61,8 +64,12 @@ int main() {
 
     while (1) {
         if (game_over) {
-            show_victory_screen();
-            sleep_ms(5000);
+            if (victory) {
+                show_victory_screen();
+            } else {
+                show_game_over_screen();
+            }
+            sleep_ms(5000); // 5 segundos antes de reiniciar
             reset_game();
             continue;
         }
@@ -74,22 +81,34 @@ int main() {
                 play_sound(BUZZER2, 3000);
             }
 
-            // Verificação de colisão
-            if (abs(cursor_x - target_x) < 3 && abs(cursor_y - target_y) < 3) {
-                if (!gpio_get(JOYSTICK_BTN)) {
+            // Verificar clique no botão do joystick
+            if (!gpio_get(JOYSTICK_BTN)) {
+                click_count++;
+                sleep_ms(50); // Debounce básico para evitar múltiplos cliques rápidos
+
+                // Verificação de colisão
+                if (abs(cursor_x - target_x) < 3 && abs(cursor_y - target_y) < 3) {
                     score++;
                     play_sound(BUZZER1, 2000);
                     target_x = (rand() % (WIDTH - 4)) + 2;
                     target_y = (rand() % (HEIGHT - 4)) + 2;
-                    sleep_ms(50);
+                    click_count = 0; // Reseta o contador ao acertar o alvo
                     update_led_matrix(score); // Atualiza a matriz imediatamente após incrementar o score
                 }
+            }
+
+            // Verificar derrota (mais de 20 cliques sem ponto)
+            if (click_count > 20) {
+                game_over = true;
+                victory = false; // Indica derrota
+                continue;
             }
 
             // Verificar vitória
             if (score >= 25) {
                 update_led_matrix(score); // Garante que os 25 LEDs estejam acesos
                 game_over = true;
+                victory = true; // Indica vitória
                 playing = false;
                 continue;
             }
@@ -105,6 +124,16 @@ int main() {
             int x_pos = 48;
             for (int i = 0; score_str[i] != '\0'; i++) {
                 ssd1306_draw_char(&ssd, score_str[i], x_pos, 0);
+                x_pos += 8;
+            }
+
+            // Exibir contador de cliques
+            char click_str[4];
+            snprintf(click_str, sizeof(click_str), "%d", click_count);
+            ssd1306_draw_string(&ssd, "Clicks:", 0, 10);
+            x_pos = 48;
+            for (int i = 0; click_str[i] != '\0'; i++) {
+                ssd1306_draw_char(&ssd, click_str[i], x_pos, 10);
                 x_pos += 8;
             }
 
@@ -266,9 +295,26 @@ void show_victory_screen() {
     }
 }
 
+void show_game_over_screen() {
+    ssd1306_fill(&ssd, false);
+    ssd1306_draw_string(&ssd, "GAME OVER!", 20, 20);
+    ssd1306_draw_string(&ssd, "Voce perdeu!", 20, 35);
+    ssd1306_send_data(&ssd);
+    
+    // Piscar LED vermelho
+    for (int i = 0; i < 10; i++) {
+        set_rgb_led(1, 0, 0); // Vermelho ligado
+        sleep_ms(250);
+        set_rgb_led(0, 0, 0); // Desligado
+        sleep_ms(250);
+    }
+}
+
 void reset_game() {
     score = 0;
+    click_count = 0; // Reseta o contador de cliques
     game_over = false;
+    victory = false; // Reseta o estado de vitória
     playing = true;
     paused = false;
     cursor_x = WIDTH/2;
@@ -276,4 +322,5 @@ void reset_game() {
     target_x = (rand() % (WIDTH - 4)) + 2;
     target_y = (rand() % (HEIGHT - 4)) + 2;
     update_led_matrix(0); // Apaga todos os LEDs da matriz ao reiniciar o jogo
+    set_rgb_led(0, 1, 0); // LED verde ao reiniciar
 }
