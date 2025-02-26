@@ -61,11 +61,6 @@ volatile bool led_state = false;
 struct repeating_timer game_timer;
 struct repeating_timer *blink_timer_ptr = NULL;
 
-// Função para definir cores no formato GRB
-static inline uint32_t color_grb(uint8_t r, uint8_t g, uint8_t b) {
-    return ((uint32_t)(g) << 16) | ((uint32_t)(r) << 8) | (uint32_t)(b);
-}
-
 // Protótipos de funções
 void init_peripherals(void);
 void read_joystick(void);
@@ -179,6 +174,7 @@ bool game_loop(struct repeating_timer *t) {
 void update_display(void) {
     ssd1306_fill(&ssd, false);
     
+    // Desenha score
     char score_str[4];
     snprintf(score_str, sizeof(score_str), "%d", score);
     ssd1306_draw_string(&ssd, "Score:", 0, 0);
@@ -188,6 +184,7 @@ void update_display(void) {
         x_pos += 8;
     }
 
+    // Desenha contagem de cliques
     char click_str[4];
     snprintf(click_str, sizeof(click_str), "%d", click_count);
     x_pos = 0;
@@ -196,6 +193,7 @@ void update_display(void) {
         x_pos += 8;
     }
 
+    // Desenha cursor
     for (int dx = -1; dx <= 1; dx++) {
         for (int dy = -1; dy <= 1; dy++) {
             int x = cursor_x + dx;
@@ -206,6 +204,7 @@ void update_display(void) {
         }
     }
 
+    // Desenha alvo
     for (int dx = -1; dx <= 1; dx++) {
         for (int dy = -1; dy <= 1; dy++) {
             int x = target_x + dx;
@@ -238,7 +237,13 @@ void maintain_final_screen(void) {
 // Callback para piscar LEDs
 bool blink_led_callback(struct repeating_timer *t) {
     if (led_blink_count > 0) {
-        set_rgb_led(led_state ? 1 : 0, led_state ? (victory ? 1 : 0) : 0, led_state ? (victory ? 1 : 0) : 0);
+        if (victory) {
+            // Piscar em verde para vitória
+            set_rgb_led(0, led_state ? 1 : 0, 0);
+        } else {
+            // Piscar em vermelho para derrota
+            set_rgb_led(led_state ? 1 : 0, 0, 0);
+        }
         led_state = !led_state;
         if (!led_state) led_blink_count--;
         return true;
@@ -358,7 +363,7 @@ int64_t stop_sound(alarm_id_t id, void *user_data) {
 void update_led_matrix(uint8_t progress) {
     uint32_t colors[25] = {0};
     for (uint i = 0; i < progress && i < 25; i++) {
-        colors[i] = color_grb(0, 255, 0); // Verde para cada ponto
+        colors[i] = 0xFF0000;  // Verde em GRB
     }
     for (uint i = 0; i < 25; i++) {
         pio_sm_put_blocking(pio0, 0, colors[i] << 8u);
